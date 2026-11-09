@@ -1,4 +1,4 @@
-name: BASH Android Build
+name: BASH Android Build and Validation
 
 'on':
   workflow_dispatch:
@@ -61,6 +61,8 @@ jobs:
           cp /tmp/godot-templates/templates/* \
             "$HOME/.local/share/godot/export_templates/4.3.stable/"
 
+          godot --headless --version
+
       - name: Configure Android signing
         shell: bash
         run: |
@@ -110,6 +112,19 @@ jobs:
             --path . \
             --import
 
+      - name: Inspect Android export settings
+        shell: bash
+        run: |
+          mkdir -p build
+
+          set -o pipefail
+
+          godot --headless \
+            --editor \
+            --path . \
+            --script tools/android_validation_check.gd \
+            2>&1 | tee build/validation.log
+
       - name: Export Android APK
         shell: bash
         run: |
@@ -126,12 +141,14 @@ jobs:
 
           test -s build/BASH-Rise-Again-debug.apk
 
-      - name: Upload diagnostic log
-        if: failure()
+      - name: Upload diagnostic logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BASH-Android-Error-Log
-          path: build/export.log
+          name: BASH-Android-Validation-Logs
+          path: |
+            build/validation.log
+            build/export.log
           if-no-files-found: ignore
 
       - name: Upload APK
