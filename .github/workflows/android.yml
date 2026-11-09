@@ -1,9 +1,10 @@
-name: BASH Android Debug Build
+name: BASH Android Build
 
 'on':
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -12,109 +13,131 @@ jobs:
   android:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
-      - name: Install Godot 4.3 and templates
+
+      - name: Install Godot 4.3
         shell: bash
         run: |
           set -euo pipefail
-          BASE=https://github.com/godotengine/godot-builds/releases/download/4.3-stable
-          curl -fLsS "$BASE/Godot_v4.3-stable_linux.x86_64.zip" -o /tmp/godot.zip
+
+          BASE="https://github.com/godotengine/godot-builds/releases/download/4.3-stable"
+
+          curl -fLsS \
+            "$BASE/Godot_v4.3-stable_linux.x86_64.zip" \
+            -o /tmp/godot.zip
+
           unzip -q /tmp/godot.zip -d /tmp
-          sudo install -m 755 /tmp/Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot
-          curl -fLsS "$BASE/Godot_v4.3-stable_export_templates.tpz" -o /tmp/templates.tpz
-          mkdir -p /tmp/templates "$HOME/.local/share/godot/export_templates/4.3.stable"
-          unzip -q /tmp/templates.tpz -d /tmp/templates
-          cp /tmp/templates/templates/* "$HOME/.local/share/godot/export_templates/4.3.stable/"
-      - name: Prepare debug signing
+
+          sudo install -m 755 \
+            /tmp/Godot_v4.3-stable_linux.x86_64 \
+            /usr/local/bin/godot
+
+          curl -fLsS \
+            "$BASE/Godot_v4.3-stable_export_templates.tpz" \
+            -o /tmp/templates.tpz
+
+          mkdir -p /tmp/godot-templates
+
+          unzip -q /tmp/templates.tpz \
+            -d /tmp/godot-templates
+
+          mkdir -p \
+            "$HOME/.local/share/godot/export_templates/4.3.stable"
+
+          cp /tmp/godot-templates/templates/* \
+            "$HOME/.local/share/godot/export_templates/4.3.stable/"
+
+      - name: Configure Android signing
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p build
-          keytool -genkeypair -keystore "$RUNNER_TEMP/bash-debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
-          echo "BASH_KEY=$RUNNER_TEMP/bash-debug.keystore" >> "$GITHUB_ENV"
-      - name: Import project and initialize editor settings
-        shell: bash
-        run: |
-          set -o pipefail
-          godot --headless --editor --path . --import 2>&1 | tee build/import.log
-      - name: Configure existing editor settings and preset
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import os, re
-          path = Path.home() / '.config/godot/editor_settings-4.tres'
-          if not path.is_file():
-              raise RuntimeError('Godot editor settings not created: ' + str(path))
-          data = path.read_text()
-          if '[resource]' not in data:
-              raise RuntimeError('Godot editor settings lack [resource]; inspect import.log')
-          settings = {
-              'export/android/android_sdk_path': os.environ['ANDROID_HOME'],
-              'export/android/java_sdk_path': os.environ['JAVA_HOME'],
-              'export/android/debug_keystore': os.environ['BASH_KEY'],
-              'export/android/debug_keystore_user': 'androiddebugkey',
-              'export/android/debug_keystore_pass': 'android',
-          }
-          for key, value in settings.items():
-              line = f'{key} = "{value}"'
-              pat = r'^' + re.escape(key) + r'\s*=.*$'
-              if re.search(pat, data, flags=re.M):
-                  data = re.sub(pat, lambda _: line, data, count=1, flags=re.M)
-              else:
-                  data = data.replace('[resource]', '[resource]\n' + line, 1)
-          path.write_text(data)
-          preset_path = Path('export_presets.cfg')
-          preset = preset_path.read_text()
-          for key, value in {
-              'keystore/debug': os.environ['BASH_KEY'],
-              'keystore/debug_user': 'androiddebugkey',
-              'keystore/debug_password': 'android',
-          }.items():
-              pat = r'^' + re.escape(key) + r'\s*=.*$'
-              if not re.search(pat, preset, flags=re.M):
-                  raise RuntimeError('Missing preset key: ' + key)
-              preset = re.sub(pat, lambda _: f'{key}="{value}"', preset, count=1, flags=re.M)
-          preset_path.write_text(preset)
-          print('Settings and preset updated without printing passwords')
-          PY
-      - name: Verify Android files
+
+          keytool -genkeypair \
+            -keystore "$RUNNER_TEMP/bash-debug.keystore" \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$RUNNER_TEMP/bash-debug.keystore" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+
+      - name: Configure Godot editor settings
         shell: bash
         run: |
           set -euo pipefail
-          test -f "$ANDROID_HOME/platforms/android-34/android.jar"
-          test -f "$ANDROID_HOME/build-tools/34.0.0/aapt2"
-          test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
-          test -f "$BASH_KEY"
-          godot --headless --version
-      - name: Export debug APK
+
+          mkdir -p "$HOME/.config/godot"
+
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$RUNNER_TEMP/bash-debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+
+      - name: Import Godot project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          godot --headless \
+            --editor \
+            --path . \
+            --import
+
+      - name: Export Android APK
         shell: bash
         run: |
           set -o pipefail
-          godot --headless --verbose --path . --export-debug Android build/BASH-Rise-Again-debug.apk 2>&1 | tee build/export.log
+
+          mkdir -p build
+
+          godot --headless \
+            --verbose \
+            --path . \
+            --export-debug "Android" \
+            build/BASH-Rise-Again-debug.apk \
+            2>&1 | tee build/export.log
+
           test -s build/BASH-Rise-Again-debug.apk
-      - name: Upload diagnostics
-        if: always()
+
+      - name: Upload diagnostic log
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: BASH-Reviewed-Logs
-          path: |
-            build/import.log
-            build/export.log
+          name: BASH-Android-Error-Log
+          path: build/export.log
           if-no-files-found: ignore
-      - name: Upload debug APK
+
+      - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: BASH-Debug-APK
+          name: BASH-Rise-Again-APK
           path: build/BASH-Rise-Again-debug.apk
           if-no-files-found: error
