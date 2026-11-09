@@ -106,6 +106,29 @@ jobs:
           result=$?
           cat build/settings-check.txt
           exit "$result"
+      - name: Check Android export requirements
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          {
+            echo '=== GODOT / ANDROID EXPORT REQUIREMENTS ==='
+            godot --headless --version
+            echo 'SDK path:' "$ANDROID_HOME"
+            echo 'JDK path:' "$JAVA_HOME"
+            echo 'SDK platforms:'
+            ls -la "$ANDROID_HOME/platforms"
+            echo 'SDK build tools:'
+            ls -la "$ANDROID_HOME/build-tools"
+            echo 'Godot Android template:'
+            ls -lh "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
+            echo 'Keystore:'
+            test -s "$BASH_KEY" && echo present
+            echo 'Preset sections:'
+            grep -E '^\[preset|^name=|^platform=|^architectures/|^package/unique_name=' export_presets.cfg
+            echo 'Godot editor settings file:'
+            ls -l "$HOME/.config/godot/editor_settings-4.tres"
+          } 2>&1 | tee build/requirements.txt
       - name: Export debug APK
         shell: bash
         run: |
@@ -124,6 +147,7 @@ jobs:
             build/import-log.txt
             build/settings-check.txt
             build/export-log.txt
+            build/requirements.txt
           if-no-files-found: ignore
       - name: Upload APK
         if: success()
