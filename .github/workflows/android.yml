@@ -1,15 +1,12 @@
-name: BASH Android Ubuntu Build
-
+name: BASH Android Export Repair
 'on':
   workflow_dispatch:
   push:
     branches: [main]
-
 permissions:
   contents: read
-
 jobs:
-  android:
+  build:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
@@ -26,60 +23,57 @@ jobs:
         run: |
           set -euo pipefail
           BASE=https://github.com/godotengine/godot-builds/releases/download/4.3-stable
-          curl -fLsS --retry 3 "$BASE/Godot_v4.3-stable_linux.x86_64.zip" -o "$RUNNER_TEMP/godot.zip"
-          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP"
-          sudo install -m 755 "$RUNNER_TEMP/Godot_v4.3-stable_linux.x86_64" /usr/local/bin/godot
-          curl -fLsS --retry 3 "$BASE/Godot_v4.3-stable_export_templates.tpz" -o "$RUNNER_TEMP/templates.tpz"
-          mkdir -p "$RUNNER_TEMP/godot-templates"
-          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/godot-templates"
-          DEST="$HOME/.local/share/godot/export_templates/4.3.stable"
-          mkdir -p "$DEST"
-          cp "$RUNNER_TEMP/godot-templates/templates/"* "$DEST/"
-          test -s "$DEST/android_debug.apk"
-          test -s "$DEST/android_release.apk"
-      - name: Configure Android export
+          curl -fLsS "$BASE/Godot_v4.3-stable_linux.x86_64.zip" -o /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d /tmp
+          sudo install -m 755 /tmp/Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot
+          curl -fLsS "$BASE/Godot_v4.3-stable_export_templates.tpz" -o /tmp/templates.tpz
+          mkdir -p /tmp/templates "$HOME/.local/share/godot/export_templates/4.3.stable"
+          unzip -q /tmp/templates.tpz -d /tmp/templates
+          cp /tmp/templates/templates/* "$HOME/.local/share/godot/export_templates/4.3.stable/"
+          test -s "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
+      - name: Generate signing key
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build "$HOME/.config/godot"
-          KEY="$RUNNER_TEMP/bash-debug.keystore"
-          keytool -genkeypair -noprompt -keystore "$KEY" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
-          cat > "$HOME/.config/godot/editor_settings-4.tres" <<SETTINGS
-          [gd_resource type="EditorSettings" format=3]
-
-          [resource]
-          export/android/android_sdk_path = "$ANDROID_HOME"
-          export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/debug_keystore = "$KEY"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
-          SETTINGS
-          export BASH_KEY="$KEY"
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-          p = Path('export_presets.cfg')
-          data = p.read_text()
-          for k,v in {'keystore/debug':os.environ['BASH_KEY'], 'keystore/debug_user':'androiddebugkey', 'keystore/debug_password':'android'}.items():
-              data,n = re.subn(r'^'+re.escape(k)+r'\s*=.*$',lambda _: k+'="'+v+'"',data,count=1,flags=re.M)
-              if n != 1: raise RuntimeError('Missing export option: '+k)
-          p.write_text(data)
-          PY
+          mkdir -p build
+          keytool -genkeypair -noprompt -keystore "$RUNNER_TEMP/bash-debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
+          echo "BASH_KEY=$RUNNER_TEMP/bash-debug.keystore" >> "$GITHUB_ENV"
       - name: Import project
         shell: bash
         run: |
-          mkdir -p build
-          godot --headless --editor --path . --import > build/import.log 2>&1 || { cat build/import.log; exit 1; }
+          set -o pipefail
+          godot --headless --editor --path . --import 2>&1 | tee build/import.log
+      - name: Configure settings using Godot API
+        shell: bash
+        run: |
+          set -o pipefail
+          godot --headless --editor --path . --script tools/configure_android.gd 2>&1 | tee build/configure.log
+      - name: Set debug signing in export preset
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,re
+          p=Path('export_presets.cfg')
+          s=p.read_text()
+          for key,value in {'keystore/debug':os.environ['BASH_KEY'],'keystore/debug_user':'androiddebugkey','keystore/debug_password':'android'}.items():
+              pattern=r'^'+re.escape(key)+r'\s*=.*$'
+              s,count=re.subn(pattern,lambda m:key+'="'+value+'"',s,count=1,flags=re.M)
+              if count!=1: raise RuntimeError('Missing key: '+key)
+          p.write_text(s)
+          PY
       - name: Export debug APK
         shell: bash
         run: |
-          godot --headless --verbose --path . --export-debug Android build/BASH-Rise-Again-debug.apk > build/export.log 2>&1 || { cat build/export.log; exit 1; }
+          set -o pipefail
+          godot --headless --verbose --path . --export-debug Android build/BASH-Rise-Again-debug.apk 2>&1 | tee build/export.log
           test -s build/BASH-Rise-Again-debug.apk
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BASH-Ubuntu-Logs
+          name: BASH-API-Validation-Logs
           path: build/*.log
           if-no-files-found: ignore
       - name: Upload APK
