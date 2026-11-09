@@ -1,94 +1,67 @@
-name: BASH Android Clean Export Test
+name: BASH Clean Android Export Verification
 
 'on':
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
 
 jobs:
-  clean-export:
+  clean-test:
     runs-on: ubuntu-22.04
     timeout-minutes: 35
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
-
-      - name: Install Godot 4.3
+      - name: Install Godot 4.3 and templates
         shell: bash
         run: |
           set -euo pipefail
-          BASE="https://github.com/godotengine/godot-builds/releases/download/4.3-stable"
-
-          curl -fLsS \
-            "$BASE/Godot_v4.3-stable_linux.x86_64.zip" \
-            -o /tmp/godot.zip
-
+          base=https://github.com/godotengine/godot-builds/releases/download/4.3-stable
+          curl -fLsS "$base/Godot_v4.3-stable_linux.x86_64.zip" -o /tmp/godot.zip
           unzip -q /tmp/godot.zip -d /tmp
-
-          sudo install -m 755 \
-            /tmp/Godot_v4.3-stable_linux.x86_64 \
-            /usr/local/bin/godot
-
-          curl -fLsS \
-            "$BASE/Godot_v4.3-stable_export_templates.tpz" \
-            -o /tmp/templates.tpz
-
-          mkdir -p /tmp/godot-templates
-
-          unzip -q /tmp/templates.tpz \
-            -d /tmp/godot-templates
-
-          mkdir -p \
-            "$HOME/.local/share/godot/export_templates/4.3.stable"
-
-          cp /tmp/godot-templates/templates/* \
-            "$HOME/.local/share/godot/export_templates/4.3.stable/"
-
-          godot --headless --version
-
-      - name: Create clean test project
+          sudo install -m 755 /tmp/Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot
+          curl -fLsS "$base/Godot_v4.3-stable_export_templates.tpz" -o /tmp/templates.tpz
+          mkdir -p /tmp/templates "$HOME/.local/share/godot/export_templates/4.3.stable"
+          unzip -q /tmp/templates.tpz -d /tmp/templates
+          cp /tmp/templates/templates/* "$HOME/.local/share/godot/export_templates/4.3.stable/"
+      - name: Validate exact Android dependencies
         shell: bash
         run: |
           set -euo pipefail
-
-          mkdir -p /tmp/bash-clean-test
-
-          cat > /tmp/bash-clean-test/project.godot <<'EOF'
+          mkdir -p clean-results
+          {
+            echo "SDK=$ANDROID_HOME"
+            echo "JDK=$JAVA_HOME"
+            for f in "$ANDROID_HOME/platforms/android-34/android.jar" "$ANDROID_HOME/build-tools/34.0.0/aapt2" "$ANDROID_HOME/build-tools/34.0.0/apksigner" "$ANDROID_HOME/build-tools/34.0.0/zipalign" "$ANDROID_HOME/platform-tools/adb" "$JAVA_HOME/bin/java" "$JAVA_HOME/bin/keytool" "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"; do
+              if test -f "$f"; then echo "FOUND $f"; else echo "MISSING $f"; fi
+            done
+          } | tee clean-results/dependencies.txt
+      - name: Create clean project and signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/bash-clean
+          cat > /tmp/bash-clean/project.godot <<'PROJECT'
           config_version=5
-
           [application]
           config/name="BASH Clean Test"
           run/main_scene="res://main.tscn"
-          config/features=PackedStringArray("4.3", "GL Compatibility")
-
           [rendering]
           renderer/rendering_method="gl_compatibility"
           renderer/rendering_method.mobile="gl_compatibility"
-          EOF
-
-          cat > /tmp/bash-clean-test/main.tscn <<'EOF'
+          PROJECT
+          cat > /tmp/bash-clean/main.tscn <<'SCENE'
           [gd_scene format=3]
-
           [node name="Main" type="Node2D"]
-          EOF
-
-          cat > /tmp/bash-clean-test/export_presets.cfg <<'EOF'
+          SCENE
+          cat > /tmp/bash-clean/export_presets.cfg <<'PRESET'
           [preset.0]
           name="Android"
           platform="Android"
@@ -98,12 +71,11 @@ jobs:
           export_filter="all_resources"
           include_filter=""
           exclude_filter=""
-          export_path="clean-test.apk"
+          export_path="clean.apk"
           encryption_include_filters=""
           encryption_exclude_filters=""
           encrypt_pck=false
           encrypt_directory=false
-
           [preset.0.options]
           custom_template/debug=""
           custom_template/release=""
@@ -119,94 +91,37 @@ jobs:
           keystore/debug=""
           keystore/debug_user=""
           keystore/debug_password=""
-          EOF
-
-      - name: Configure Android signing
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          keytool -genkeypair \
-            -keystore "$RUNNER_TEMP/debug.keystore" \
-            -storepass android \
-            -keypass android \
-            -alias androiddebugkey \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
-
+          PRESET
+          keytool -genkeypair -noprompt -keystore "$RUNNER_TEMP/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
           echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
-
-      - name: Configure Godot editor settings
-        shell: bash
-        run: |
-          set -euo pipefail
-
+          echo 'GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey' >> "$GITHUB_ENV"
+          echo 'GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android' >> "$GITHUB_ENV"
           mkdir -p "$HOME/.config/godot"
-
-          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<SETTINGS
           [gd_resource type="EditorSettings" format=3]
-
           [resource]
           export/android/android_sdk_path = "$ANDROID_HOME"
           export/android/java_sdk_path = "$JAVA_HOME"
-          EOF
-
-          test -f "$ANDROID_HOME/platforms/android-34/android.jar"
-          test -f "$ANDROID_HOME/build-tools/34.0.0/aapt2"
-
-      - name: Import clean project
+          export/android/debug_keystore = "$RUNNER_TEMP/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          SETTINGS
+      - name: Import and export clean test
         shell: bash
         run: |
           mkdir -p clean-results
-
-          godot --headless \
-            --editor \
-            --path /tmp/bash-clean-test \
-            --import \
-            > clean-results/import.txt 2>&1
-
-          cat clean-results/import.txt
-
-      - name: Export clean test APK
-        shell: bash
-        run: |
-          mkdir -p clean-results
-
           set +e
-
-          godot --headless \
-            --verbose \
-            --path /tmp/bash-clean-test \
-            --export-debug "Android" \
-            "$GITHUB_WORKSPACE/clean-results/clean-test.apk" \
-            > clean-results/export.txt 2>&1
-
-          RESULT=$?
-
-          cat clean-results/export.txt
-
-          echo "Export exit code: $RESULT" \
-            > clean-results/result.txt
-
-          if [ "$RESULT" -eq 0 ] && \
-             [ -s clean-results/clean-test.apk ]; then
-            echo "CLEAN EXPORT SUCCESS" \
-              >> clean-results/result.txt
-          else
-            echo "CLEAN EXPORT FAILED" \
-              >> clean-results/result.txt
-          fi
-
+          godot --headless --editor --path /tmp/bash-clean --import > clean-results/import.txt 2>&1
+          import_status=$?
+          godot --headless --verbose --path /tmp/bash-clean --export-debug Android "$GITHUB_WORKSPACE/clean-results/clean.apk" > clean-results/export.txt 2>&1
+          export_status=$?
+          echo "import=$import_status export=$export_status" | tee clean-results/result.txt
+          if test "$export_status" -eq 0 && test -s clean-results/clean.apk; then echo SUCCESS >> clean-results/result.txt; else echo FAILED >> clean-results/result.txt; fi
           exit 0
-
-      - name: Upload test results
+      - name: Upload diagnostic results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BASH-Clean-Export-Test-Results
+          name: BASH-Clean-Test-Verified-Logs
           path: clean-results/
           if-no-files-found: warn
