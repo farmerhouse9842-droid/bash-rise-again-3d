@@ -1,10 +1,13 @@
-name: BASH Android Build and Validation
+name: BASH Android Debug Build
+
 'on':
   workflow_dispatch:
   push:
     branches: [main]
+
 permissions:
   contents: read
+
 jobs:
   android:
     runs-on: ubuntu-22.04
@@ -18,7 +21,7 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
-      - name: Install Godot and templates
+      - name: Install Godot 4.3 and templates
         shell: bash
         run: |
           set -euo pipefail
@@ -30,37 +33,61 @@ jobs:
           mkdir -p /tmp/templates "$HOME/.local/share/godot/export_templates/4.3.stable"
           unzip -q /tmp/templates.tpz -d /tmp/templates
           cp /tmp/templates/templates/* "$HOME/.local/share/godot/export_templates/4.3.stable/"
-      - name: Create debug key and configure preset
+      - name: Prepare debug signing
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build "$HOME/.android" "$HOME/.config/godot"
+          mkdir -p build
           keytool -genkeypair -keystore "$RUNNER_TEMP/bash-debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
           echo "BASH_KEY=$RUNNER_TEMP/bash-debug.keystore" >> "$GITHUB_ENV"
+      - name: Import project and initialize editor settings
+        shell: bash
+        run: |
+          set -o pipefail
+          godot --headless --editor --path . --import 2>&1 | tee build/import.log
+      - name: Configure existing editor settings and preset
+        shell: bash
+        run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import os,re
-          p=Path('export_presets.cfg')
-          s=p.read_text()
-          for key,value in {'keystore/debug':os.environ['RUNNER_TEMP']+'/bash-debug.keystore','keystore/debug_user':'androiddebugkey','keystore/debug_password':'android'}.items():
-              pattern=r'^'+re.escape(key)+r'\s*=.*$'
-              if re.search(pattern,s,re.M):
-                  s=re.sub(pattern,lambda _:key+'="'+value+'"',s,count=1,flags=re.M)
+          import os, re
+          path = Path.home() / '.config/godot/editor_settings-4.tres'
+          if not path.is_file():
+              raise RuntimeError('Godot editor settings not created: ' + str(path))
+          data = path.read_text()
+          if '[resource]' not in data:
+              raise RuntimeError('Godot editor settings lack [resource]; inspect import.log')
+          settings = {
+              'export/android/android_sdk_path': os.environ['ANDROID_HOME'],
+              'export/android/java_sdk_path': os.environ['JAVA_HOME'],
+              'export/android/debug_keystore': os.environ['BASH_KEY'],
+              'export/android/debug_keystore_user': 'androiddebugkey',
+              'export/android/debug_keystore_pass': 'android',
+          }
+          for key, value in settings.items():
+              line = f'{key} = "{value}"'
+              pat = r'^' + re.escape(key) + r'\s*=.*$'
+              if re.search(pat, data, flags=re.M):
+                  data = re.sub(pat, lambda _: line, data, count=1, flags=re.M)
               else:
-                  s += '\n'+key+'="'+value+'"\n'
-          p.write_text(s)
+                  data = data.replace('[resource]', '[resource]\n' + line, 1)
+          path.write_text(data)
+          preset_path = Path('export_presets.cfg')
+          preset = preset_path.read_text()
+          for key, value in {
+              'keystore/debug': os.environ['BASH_KEY'],
+              'keystore/debug_user': 'androiddebugkey',
+              'keystore/debug_password': 'android',
+          }.items():
+              pat = r'^' + re.escape(key) + r'\s*=.*$'
+              if not re.search(pat, preset, flags=re.M):
+                  raise RuntimeError('Missing preset key: ' + key)
+              preset = re.sub(pat, lambda _: f'{key}="{value}"', preset, count=1, flags=re.M)
+          preset_path.write_text(preset)
+          print('Settings and preset updated without printing passwords')
           PY
-          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
-          [gd_resource type="EditorSettings" format=3]
-
-          [resource]
-          export/android/android_sdk_path = "$ANDROID_HOME"
-          export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/debug_keystore = "$RUNNER_TEMP/bash-debug.keystore"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
-          EOF
-      - name: Validate installed Android environment
+      - name: Verify Android files
         shell: bash
         run: |
           set -euo pipefail
@@ -68,13 +95,7 @@ jobs:
           test -f "$ANDROID_HOME/build-tools/34.0.0/aapt2"
           test -f "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
           test -f "$BASH_KEY"
-          java -version
           godot --headless --version
-      - name: Import project
-        shell: bash
-        run: |
-          set -o pipefail
-          godot --headless --editor --path . --import 2>&1 | tee build/import.log
       - name: Export debug APK
         shell: bash
         run: |
@@ -85,7 +106,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BASH-Complete-Diagnostics
+          name: BASH-Reviewed-Logs
           path: |
             build/import.log
             build/export.log
@@ -94,6 +115,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: BASH-Android-Debug-APK
+          name: BASH-Debug-APK
           path: build/BASH-Rise-Again-debug.apk
           if-no-files-found: error
