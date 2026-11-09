@@ -33,10 +33,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           V=4.3
 
-          wget -q \
-            "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_linux.x86_64.zip"
+          wget -q "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_linux.x86_64.zip"
 
           unzip -q "Godot_v${V}-stable_linux.x86_64.zip"
 
@@ -44,8 +44,7 @@ jobs:
             "Godot_v${V}-stable_linux.x86_64" \
             /usr/local/bin/godot
 
-          wget -q \
-            "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_export_templates.tpz"
+          wget -q "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_export_templates.tpz"
 
           mkdir -p /tmp/godot-templates
 
@@ -86,6 +85,7 @@ jobs:
 
           test -n "$SDK"
           test -d "$SDK"
+          test -d "$JAVA_HOME"
           test -f "$BASH_DEBUG_KEYSTORE"
 
           mkdir -p "$HOME/.config/godot"
@@ -95,10 +95,14 @@ jobs:
 
           [resource]
           export/android/android_sdk_path = "$SDK"
+          export/android/java_sdk_path = "$JAVA_HOME"
           export/android/debug_keystore = "$BASH_DEBUG_KEYSTORE"
           export/android/debug_keystore_user = "androiddebugkey"
           export/android/debug_keystore_pass = "android"
           EOF
+
+          echo "Android SDK: $SDK"
+          echo "Java SDK: $JAVA_HOME"
 
       - name: Configure export signing
         shell: bash
@@ -107,25 +111,22 @@ jobs:
 
           python3 - <<'PY'
           import os
+          import re
           from pathlib import Path
 
-          p = Path("export_presets.cfg")
-          data = p.read_text()
+          path = Path("export_presets.cfg")
+          data = path.read_text()
 
-          values = {
-              "keystore/debug":
-                  os.environ["BASH_DEBUG_KEYSTORE"],
-              "keystore/debug_user":
-                  "androiddebugkey",
-              "keystore/debug_password":
-                  "android",
+          settings = {
+              "keystore/debug": os.environ["BASH_DEBUG_KEYSTORE"],
+              "keystore/debug_user": "androiddebugkey",
+              "keystore/debug_password": "android",
           }
 
-          import re
-
-          for key, value in values.items():
+          for key, value in settings.items():
               pattern = r'^' + re.escape(key) + r'="[^"]*"'
               replacement = key + '="' + value + '"'
+
               data, count = re.subn(
                   pattern,
                   lambda m, v=replacement: v,
@@ -133,13 +134,14 @@ jobs:
                   count=1,
                   flags=re.MULTILINE
               )
+
               if count != 1:
                   raise RuntimeError(
-                      "Missing preset option: " + key
+                      "Missing export preset option: " + key
                   )
 
-          p.write_text(data)
-          print("Signing configured")
+          path.write_text(data)
+          print("Debug signing configured")
           PY
 
       - name: Diagnose Android environment
@@ -147,24 +149,27 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Android SDK:"
-          echo "$ANDROID_HOME"
-
           echo "Java:"
           java -version
 
-          echo "Android platforms:"
+          echo "JAVA_HOME:"
+          echo "$JAVA_HOME"
+
+          echo "Android SDK:"
+          echo "$ANDROID_HOME"
+
+          echo "Installed Android platforms:"
           ls -la "$ANDROID_HOME/platforms"
 
-          echo "Android build tools:"
+          echo "Installed Android build tools:"
           ls -la "$ANDROID_HOME/build-tools"
 
-          echo "Godot templates:"
+          echo "Godot export templates:"
           ls -la "$HOME/.local/share/godot/export_templates/4.3.stable"
 
           echo "Debug keystore:"
           test -f "$BASH_DEBUG_KEYSTORE"
-          echo "Keystore found"
+          echo "Found"
 
       - name: Import Godot project
         shell: bash
