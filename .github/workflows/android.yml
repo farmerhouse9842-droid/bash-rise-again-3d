@@ -3,7 +3,8 @@ name: Build BASH Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -23,26 +24,49 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Godot
+      - name: Install Godot 4.3
         shell: bash
         run: |
           set -euxo pipefail
-          V=4.3
-          wget -q "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_linux.x86_64.zip"
-          unzip -q "Godot_v${V}-stable_linux.x86_64.zip"
-          sudo install -m 755 "Godot_v${V}-stable_linux.x86_64" /usr/local/bin/godot
 
-          wget -q "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_export_templates.tpz"
-          mkdir -p "$HOME/.local/share/godot/export_templates/${V}.stable"
-          unzip -q "Godot_v${V}-stable_export_templates.tpz" -d /tmp/godot-templates
-          cp /tmp/godot-templates/templates/* "$HOME/.local/share/godot/export_templates/${V}.stable/"
+          V=4.3
+
+          wget -q \
+            "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_linux.x86_64.zip"
+
+          unzip -q \
+            "Godot_v${V}-stable_linux.x86_64.zip"
+
+          sudo install -m 755 \
+            "Godot_v${V}-stable_linux.x86_64" \
+            /usr/local/bin/godot
+
+          wget -q \
+            "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_export_templates.tpz"
+
+          mkdir -p \
+            "$HOME/.local/share/godot/export_templates/${V}.stable"
+
+          mkdir -p /tmp/godot-templates
+
+          unzip -q \
+            "Godot_v${V}-stable_export_templates.tpz" \
+            -d /tmp/godot-templates
+
+          cp /tmp/godot-templates/templates/* \
+            "$HOME/.local/share/godot/export_templates/${V}.stable/"
 
       - name: Configure Android SDK
         shell: bash
         run: |
           set -euxo pipefail
+
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+
           test -d "$SDK"
+
+          echo "Android SDK: $SDK"
+          java -version
 
           keytool -genkeypair \
             -keystore "$HOME/debug.keystore" \
@@ -66,15 +90,36 @@ jobs:
           export/android/debug_keystore_pass = "android"
           EOF
 
-      - name: Import project
+          test -f "$HOME/debug.keystore"
+
+          echo "Android configuration completed"
+
+      - name: Import Godot project
+        shell: bash
         run: |
-          godot --headless --editor --path . --import
+          set -o pipefail
+
+          godot --headless \
+            --verbose \
+            --editor \
+            --path . \
+            --import
 
       - name: Export Android APK
         shell: bash
         run: |
+          set -o pipefail
+
           mkdir -p build
-          godot --headless --path . --export-debug "Android" build/BASH-Rise-Again-v4.apk
+
+          echo "Starting Android APK export"
+
+          godot --headless \
+            --verbose \
+            --path . \
+            --export-debug "Android" \
+            build/BASH-Rise-Again-v4.apk
+
           test -s build/BASH-Rise-Again-v4.apk
 
       - name: Upload APK
@@ -82,3 +127,4 @@ jobs:
         with:
           name: BASH-Rise-Again-V4-APK
           path: build/BASH-Rise-Again-v4.apk
+          if-no-files-found: error
