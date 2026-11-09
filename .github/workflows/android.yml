@@ -18,6 +18,17 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+      - name: Install and verify Android export dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;23.2.8568313" "cmake;3.10.2.4988404"
+          test -d "$ANDROID_HOME/platforms/android-34"
+          test -d "$ANDROID_HOME/build-tools/34.0.0"
+          test -d "$ANDROID_HOME/ndk/23.2.8568313"
+          test -d "$JAVA_HOME"
+          echo "Verified Android SDK, NDK and Java installation"
       - name: Install Godot 4.3 and templates
         shell: bash
         run: |
@@ -64,6 +75,8 @@ jobs:
           godot --headless --path . --export-debug Android build/BASH-Rise-Again.apk > build/export-log.txt 2>&1
           code=$?
           cat build/export-log.txt
+          echo "SDK package inventory:" >> build/export-log.txt
+          sdkmanager --list_installed >> build/export-log.txt 2>&1 || true
           echo "Export exit code: $code"
           exit "$code"
       - name: Upload diagnostics
