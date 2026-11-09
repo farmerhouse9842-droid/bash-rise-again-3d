@@ -3,12 +3,12 @@ extends SceneTree
 func _initialize() -> void:
     print("=== BASH GODOT 4.3 EXPORT API INSPECTION ===")
     print("Godot: ", Engine.get_version_info().get("string", "unknown"))
-    for class_name in ["EditorExport", "EditorExportPlatform", "EditorExportPreset", "EditorInterface"]:
-        print("\nCLASS: ", class_name)
-        if not ClassDB.class_exists(class_name):
+    for class_id in ["EditorExport", "EditorExportPlatform", "EditorExportPreset", "EditorInterface"]:
+        print("\nCLASS: ", class_id)
+        if not ClassDB.class_exists(class_id):
             print("NOT REGISTERED")
             continue
-        for method in ClassDB.class_get_method_list(class_name, true):
+        for method in ClassDB.class_get_method_list(class_id, true):
             var method_name: String = str(method.get("name", ""))
             if "export" in method_name.to_lower() or "configuration" in method_name.to_lower() or "preset" in method_name.to_lower() or "platform" in method_name.to_lower() or "singleton" in method_name.to_lower():
                 print("METHOD: ", method_name, " | flags=", method.get("flags", 0), " | args=", method.get("args", []))
