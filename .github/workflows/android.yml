@@ -1,15 +1,12 @@
-name: BASH Android APK - Controlled Repair
-
+name: BASH Android Export - Focused Diagnosis
 'on':
   workflow_dispatch:
   push:
     branches: [main]
-
 permissions:
   contents: read
-
 jobs:
-  android:
+  build:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
@@ -21,7 +18,7 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
-      - name: Install Godot 4.3 and templates
+      - name: Install Godot and templates
         shell: bash
         run: |
           set -euo pipefail
@@ -33,63 +30,70 @@ jobs:
           mkdir -p /tmp/templates "$HOME/.local/share/godot/export_templates/4.3.stable"
           unzip -q /tmp/templates.tpz -d /tmp/templates
           cp /tmp/templates/templates/* "$HOME/.local/share/godot/export_templates/4.3.stable/"
-      - name: Configure editor and debug signing
+      - name: Configure signing and editor paths
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build "$HOME/.config/godot"
-          keytool -genkeypair -keystore "$RUNNER_TEMP/bash-debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$RUNNER_TEMP/bash-debug.keystore" >> "$GITHUB_ENV"
+          mkdir -p build "$HOME/.android" "$HOME/.config/godot"
+          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOFSET
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOFSET
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
           echo 'GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey' >> "$GITHUB_ENV"
           echo 'GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android' >> "$GITHUB_ENV"
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          sdk=os.environ['ANDROID_HOME']
-          java=os.environ['JAVA_HOME']
-          key=os.environ['RUNNER_TEMP']+'/bash-debug.keystore'
-          settings=Path.home()/'.config/godot/editor_settings-4.tres'
-          settings.write_text('[gd_resource type="EditorSettings" format=3]\n\n[resource]\n'+''.join(f'{k} = "{v}"\n' for k,v in {
-            'export/android/android_sdk_path':sdk,
-            'export/android/java_sdk_path':java,
-            'export/android/debug_keystore':key,
-            'export/android/debug_keystore_user':'androiddebugkey',
-            'export/android/debug_keystore_pass':'android',
-          }.items()))
-          preset=Path('export_presets.cfg')
-          s=preset.read_text()
-          import re
-          for k,v in {'keystore/debug':key,'keystore/debug_user':'androiddebugkey','keystore/debug_password':'android'}.items():
-            s,n=re.subn(r'^'+re.escape(k)+r'=.*$',lambda _:k+'="'+v+'"',s,count=1,flags=re.M)
-            if n!=1: raise RuntimeError('Missing preset key: '+k)
-          preset.write_text(s)
-          print('Editor and export preset debug signing configured')
-          PY
-          test -s "$ANDROID_HOME/platforms/android-34/android.jar"
+      - name: Verify actual inputs
+        shell: bash
+        run: |
+          set -euo pipefail
           test -s "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
+          test -f "$ANDROID_HOME/platforms/android-34/android.jar"
+          test -f "$ANDROID_HOME/build-tools/34.0.0/aapt2"
+          test -f "$HOME/.android/debug.keystore"
+          test -f export_presets.cfg
+          grep -q 'name="Android"' export_presets.cfg
+          echo 'Template, SDK, keystore and preset exist' | tee build/preflight.txt
+          godot --headless --version | tee -a build/preflight.txt
       - name: Import project
         shell: bash
         run: |
-          set -o pipefail
-          godot --headless --editor --path . --import 2>&1 | tee build/import.txt
+          set +e
+          godot --headless --editor --path . --import > build/import.txt 2>&1
+          status=$?
+          cat build/import.txt
+          exit "$status"
       - name: Export debug APK
         shell: bash
         run: |
-          set -o pipefail
-          godot --headless --verbose --path . --export-debug Android build/BASH-Rise-Again-debug.apk 2>&1 | tee build/export.txt
-          test -s build/BASH-Rise-Again-debug.apk
+          set +e
+          godot --headless --verbose --path . --export-debug Android build/BASH-Rise-Again.apk > build/export.txt 2>&1
+          status=$?
+          cat build/export.txt
+          echo "Export exit code: $status" | tee build/result.txt
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          test -s build/BASH-Rise-Again.apk
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BASH-Repair-Logs
+          name: BASH-Focused-Diagnostics
           path: |
+            build/preflight.txt
             build/import.txt
             build/export.txt
+            build/result.txt
           if-no-files-found: ignore
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: BASH-Android-Debug-APK
-          path: build/BASH-Rise-Again-debug.apk
+          name: BASH-Debug-APK
+          path: build/BASH-Rise-Again.apk
+          if-no-files-found: error
