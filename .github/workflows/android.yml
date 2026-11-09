@@ -1,10 +1,13 @@
-name: BASH Android Export - Focused Diagnosis
+name: BASH Android Targeted Repair
+
 'on':
   workflow_dispatch:
   push:
     branches: [main]
+
 permissions:
   contents: read
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -18,74 +21,74 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
-      - name: Install Godot and templates
+      - name: Install Godot 4.3 and templates
         shell: bash
         run: |
           set -euo pipefail
-          base=https://github.com/godotengine/godot-builds/releases/download/4.3-stable
-          curl -fLsS "$base/Godot_v4.3-stable_linux.x86_64.zip" -o /tmp/godot.zip
+          BASE=https://github.com/godotengine/godot-builds/releases/download/4.3-stable
+          curl -fLsS "$BASE/Godot_v4.3-stable_linux.x86_64.zip" -o /tmp/godot.zip
           unzip -q /tmp/godot.zip -d /tmp
           sudo install -m 755 /tmp/Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot
-          curl -fLsS "$base/Godot_v4.3-stable_export_templates.tpz" -o /tmp/templates.tpz
-          mkdir -p /tmp/templates "$HOME/.local/share/godot/export_templates/4.3.stable"
-          unzip -q /tmp/templates.tpz -d /tmp/templates
-          cp /tmp/templates/templates/* "$HOME/.local/share/godot/export_templates/4.3.stable/"
-      - name: Configure signing and editor paths
+          curl -fLsS "$BASE/Godot_v4.3-stable_export_templates.tpz" -o /tmp/templates.tpz
+          mkdir -p /tmp/godot-templates "$HOME/.local/share/godot/export_templates/4.3.stable"
+          unzip -q /tmp/templates.tpz -d /tmp/godot-templates
+          cp /tmp/godot-templates/templates/* "$HOME/.local/share/godot/export_templates/4.3.stable/"
+      - name: Configure signing and Android settings
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build "$HOME/.android" "$HOME/.config/godot"
-          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
-          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOFSET
+          mkdir -p build "$HOME/.config/godot"
+          KEY="$RUNNER_TEMP/bash-debug.keystore"
+          keytool -genkeypair -keystore "$KEY" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$KEY" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<SETTINGS
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
           export/android/android_sdk_path = "$ANDROID_HOME"
           export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore = "$KEY"
           export/android/debug_keystore_user = "androiddebugkey"
           export/android/debug_keystore_pass = "android"
-          EOFSET
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
-          echo 'GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey' >> "$GITHUB_ENV"
-          echo 'GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android' >> "$GITHUB_ENV"
-      - name: Verify actual inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -s "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
+          SETTINGS
           test -f "$ANDROID_HOME/platforms/android-34/android.jar"
           test -f "$ANDROID_HOME/build-tools/34.0.0/aapt2"
-          test -f "$HOME/.android/debug.keystore"
-          test -f export_presets.cfg
-          grep -q 'name="Android"' export_presets.cfg
-          echo 'Template, SDK, keystore and preset exist' | tee build/preflight.txt
-          godot --headless --version | tee -a build/preflight.txt
+          test -s "$HOME/.local/share/godot/export_templates/4.3.stable/android_debug.apk"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('export_presets.cfg')
+          s=p.read_text()
+          assert 'name="Android"' in s
+          assert 'platform="Android"' in s
+          assert 'architectures/arm64-v8a=true' in s
+          print('Android preset found')
+          PY
       - name: Import project
         shell: bash
         run: |
           set +e
           godot --headless --editor --path . --import > build/import.txt 2>&1
-          status=$?
+          code=$?
           cat build/import.txt
-          exit "$status"
+          exit "$code"
       - name: Export debug APK
         shell: bash
         run: |
           set +e
-          godot --headless --verbose --path . --export-debug Android build/BASH-Rise-Again.apk > build/export.txt 2>&1
-          status=$?
+          godot --headless --verbose --path . --export-debug Android build/BASH-debug.apk > build/export.txt 2>&1
+          code=$?
           cat build/export.txt
-          echo "Export exit code: $status" | tee build/result.txt
-          if [ "$status" -ne 0 ]; then exit "$status"; fi
-          test -s build/BASH-Rise-Again.apk
-      - name: Upload diagnostics
+          echo "Export exit code: $code" > build/result.txt
+          if [ "$code" -ne 0 ]; then exit "$code"; fi
+          test -s build/BASH-debug.apk
+      - name: Upload diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BASH-Focused-Diagnostics
+          name: BASH-Targeted-Logs
           path: |
-            build/preflight.txt
             build/import.txt
             build/export.txt
             build/result.txt
@@ -95,5 +98,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: BASH-Debug-APK
-          path: build/BASH-Rise-Again.apk
+          path: build/BASH-debug.apk
           if-no-files-found: error
