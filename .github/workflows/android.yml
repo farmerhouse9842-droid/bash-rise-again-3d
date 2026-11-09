@@ -54,27 +54,49 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PYSET'
-          import os,re
+          import os, re
           from pathlib import Path
-          path=Path.home()/'.config/godot/editor_settings-4.tres'
-          if not path.exists(): raise RuntimeError('Godot did not create editor_settings-4.tres')
-          s=path.read_text()
-          if '[resource]' not in s: raise RuntimeError('Editor settings lack [resource]')
-          values={'export/android/android_sdk_path':os.environ['ANDROID_HOME'], 'export/android/java_sdk_path':os.environ['JAVA_HOME'], 'export/android/debug_keystore':os.environ['BASH_KEY'], 'export/android/debug_keystore_user':'androiddebugkey', 'export/android/debug_keystore_pass':'android'}
-          for k,v in values.items():
-              line=k+' = "'+v+'"'
-              pat=r'^'+re.escape(k)+r'\s*=.*$'
-              if re.search(pat,s,re.M): s=re.sub(pat,lambda _:line,s,count=1,flags=re.M)
-              else:s=s.replace('[resource]','[resource]\n'+line,1)
-          path.write_text(s)
-          p=Path('export_presets.cfg')
-          preset=p.read_text()
-          for k,v in {'keystore/debug':os.environ['BASH_KEY'],'keystore/debug_user':'androiddebugkey','keystore/debug_password':'android'}.items():
-              pat=r'^'+re.escape(k)+r'=.*$'
-              if not re.search(pat,preset,re.M): raise RuntimeError('Missing export preset key: '+k)
-              preset=re.sub(pat,lambda _:k+'="'+v+'"',preset,count=1,flags=re.M)
-          p.write_text(preset)
-          print('SDK/JDK/keystore configured in editor settings and preset')
+
+          path = Path.home() / '.config/godot/editor_settings-4.tres'
+          path.parent.mkdir(parents=True, exist_ok=True)
+          # Create a valid resource section even if the editor has not written one.
+          if path.exists():
+              content = path.read_text()
+          else:
+              content = ''
+          if '[resource]' not in content:
+              content = '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n'
+
+          values = {
+              'export/android/android_sdk_path': os.environ['ANDROID_HOME'],
+              'export/android/java_sdk_path': os.environ['JAVA_HOME'],
+              'export/android/debug_keystore': os.environ['BASH_KEY'],
+              'export/android/debug_keystore_user': 'androiddebugkey',
+              'export/android/debug_keystore_pass': 'android',
+          }
+          for key, value in values.items():
+              line = key + ' = "' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+              pattern = r'^' + re.escape(key) + r'\s*=.*$'
+              if re.search(pattern, content, re.MULTILINE):
+                  content = re.sub(pattern, lambda _: line, content, count=1, flags=re.MULTILINE)
+              else:
+                  content = content.replace('[resource]', '[resource]\n' + line, 1)
+          path.write_text(content)
+
+          preset_path = Path('export_presets.cfg')
+          preset = preset_path.read_text()
+          signing = {
+              'keystore/debug': os.environ['BASH_KEY'],
+              'keystore/debug_user': 'androiddebugkey',
+              'keystore/debug_password': 'android',
+          }
+          for key, value in signing.items():
+              pattern = r'^' + re.escape(key) + r'=.*$'
+              if not re.search(pattern, preset, re.MULTILINE):
+                  raise RuntimeError('Missing export preset key: ' + key)
+              preset = re.sub(pattern, lambda _: key + '="' + value + '"', preset, count=1, flags=re.MULTILINE)
+          preset_path.write_text(preset)
+          print('SDK/JDK/keystore settings written')
           PYSET
       - name: Inspect effective Godot editor settings
         shell: bash
