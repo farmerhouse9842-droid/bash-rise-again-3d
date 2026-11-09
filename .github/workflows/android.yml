@@ -26,38 +26,24 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Install Android packages
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-          sdkmanager --licenses < /dev/null || true
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
       - name: Install Godot 4.3
         shell: bash
         run: |
           set -euo pipefail
-
           V=4.3
 
-          wget -q \
-            "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_linux.x86_64.zip"
+          wget -q "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_linux.x86_64.zip"
 
-          unzip -q \
-            "Godot_v${V}-stable_linux.x86_64.zip"
+          unzip -q "Godot_v${V}-stable_linux.x86_64.zip"
 
           sudo install -m 755 \
             "Godot_v${V}-stable_linux.x86_64" \
             /usr/local/bin/godot
 
-          wget -q \
-            "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_export_templates.tpz"
+          wget -q "https://github.com/godotengine/godot-builds/releases/download/${V}-stable/Godot_v${V}-stable_export_templates.tpz"
 
           mkdir -p /tmp/godot-templates
 
@@ -65,8 +51,7 @@ jobs:
             "Godot_v${V}-stable_export_templates.tpz" \
             -d /tmp/godot-templates
 
-          mkdir -p \
-            "$HOME/.local/share/godot/export_templates/${V}.stable"
+          mkdir -p "$HOME/.local/share/godot/export_templates/${V}.stable"
 
           cp /tmp/godot-templates/templates/* \
             "$HOME/.local/share/godot/export_templates/${V}.stable/"
@@ -79,7 +64,6 @@ jobs:
           set -euo pipefail
 
           keytool -genkeypair \
-            -v \
             -keystore "$RUNNER_TEMP/bash-debug.keystore" \
             -storepass android \
             -alias androiddebugkey \
@@ -114,13 +98,10 @@ jobs:
           export/android/debug_keystore_pass = "android"
           EOF
 
-          echo "Android SDK: $SDK"
-          echo "Debug keystore configured"
+          echo "Godot Android settings configured"
 
-      - name: Configure export preset signing
+      - name: Configure export preset
         shell: bash
-        env:
-          DEBUG_KEYSTORE: ${{ env.BASH_DEBUG_KEYSTORE }}
         run: |
           set -euo pipefail
 
@@ -128,12 +109,12 @@ jobs:
           import os
           from pathlib import Path
 
-          path = Path("export_presets.cfg")
-          text = path.read_text()
+          p = Path("export_presets.cfg")
+          text = p.read_text()
 
           replacements = {
               'keystore/debug=""':
-                  'keystore/debug="' + os.environ["DEBUG_KEYSTORE"] + '"',
+                  'keystore/debug="' + os.environ["BASH_DEBUG_KEYSTORE"] + '"',
               'keystore/debug_user=""':
                   'keystore/debug_user="androiddebugkey"',
               'keystore/debug_password=""':
@@ -142,17 +123,17 @@ jobs:
 
           for old, new in replacements.items():
               if old not in text:
-                  raise RuntimeError("Missing export preset setting: " + old)
+                  raise RuntimeError("Missing preset option: " + old)
               text = text.replace(old, new)
 
-          path.write_text(text)
-          print("Debug signing configured")
+          p.write_text(text)
+          print("Export preset configured")
           PY
 
       - name: Import Godot project
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
 
           godot --headless \
             --editor \
@@ -162,7 +143,7 @@ jobs:
       - name: Export Android APK
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
 
           mkdir -p build
 
